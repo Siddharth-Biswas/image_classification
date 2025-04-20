@@ -3,11 +3,13 @@ import pandas as pd
 import requests
 from io import BytesIO
 from PIL import Image
-
 import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 
-# Load BLIP model and processor once
+# 🧱 Page config - must be first!
+st.set_page_config(page_title="Product Classifier", layout="wide")
+
+# 🧠 Load BLIP once
 @st.cache_resource
 def load_blip_model():
     processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
@@ -16,8 +18,8 @@ def load_blip_model():
 
 processor, model = load_blip_model()
 
+# 📷 Describe image with BLIP
 def classify_image_blip(image_url):
-    """Downloads image and returns a BLIP-generated caption/classification."""
     try:
         response = requests.get(image_url, stream=True, timeout=5)
         response.raise_for_status()
@@ -30,6 +32,7 @@ def classify_image_blip(image_url):
         print(f"Error classifying image: {e}")
         return "Image Classification Error"
 
+# 🔍 Rule logic
 def clean_or_split(text):
     if pd.isna(text) or not isinstance(text, str):
         return []
@@ -63,6 +66,7 @@ def matches_rule(text, include, exclude):
         return False
     return True
 
+# 🧠 Classification logic
 def classify_products(product_df, rules_df):
     parsed_rules = preprocess_rules(rules_df)
     titles = product_df['TITLE'].str.lower().fillna('')
@@ -79,7 +83,6 @@ def classify_products(product_df, rules_df):
                 matches.append(label)
         text_based_results.append(', '.join(matches))
 
-        # Image classification using BLIP
         image_url = product_df['IMAGE_URL'].iloc[index]
         if pd.isna(image_url):
             image_classification = "No Image URL"
@@ -94,8 +97,7 @@ def classify_products(product_df, rules_df):
     product_df['image_classification'] = image_based_results
     return product_df
 
-# Streamlit UI
-st.set_page_config(page_title="Product Classifier", layout="wide")
+# 🖼️ UI
 st.title("🧠 Product Classifier Tool for Flywheel (with BLIP Image Analysis)")
 st.markdown("Upload your product details and rules to auto-classify, now using BLIP for smart image understanding!")
 
