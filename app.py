@@ -6,10 +6,10 @@ from PIL import Image
 import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
 
-# 🧱 Page config - must be first!
+# ✅ Must be the first Streamlit command
 st.set_page_config(page_title="Product Classifier", layout="wide")
 
-# 🧠 Load BLIP once
+# 🔁 Load BLIP model
 @st.cache_resource
 def load_blip_model():
     processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
@@ -18,7 +18,7 @@ def load_blip_model():
 
 processor, model = load_blip_model()
 
-# 📷 Describe image with BLIP
+# 🧠 BLIP caption generation
 def classify_image_blip(image_url):
     try:
         response = requests.get(image_url, stream=True, timeout=5)
@@ -32,7 +32,7 @@ def classify_image_blip(image_url):
         print(f"Error classifying image: {e}")
         return "Image Classification Error"
 
-# 🔍 Rule logic
+# 🔍 Text rule helpers
 def clean_or_split(text):
     if pd.isna(text) or not isinstance(text, str):
         return []
@@ -66,14 +66,14 @@ def matches_rule(text, include, exclude):
         return False
     return True
 
-# 🧠 Classification logic
+# 🔄 Main classification function
 def classify_products(product_df, rules_df):
     parsed_rules = preprocess_rules(rules_df)
     titles = product_df['TITLE'].str.lower().fillna('')
     text_based_results = []
     image_based_results = []
 
-    progress_bar = st.progress(0)
+    progress_placeholder = st.empty()
     total_products = len(product_df)
 
     for index, title in enumerate(titles):
@@ -91,15 +91,15 @@ def classify_products(product_df, rules_df):
         image_based_results.append(image_classification)
 
         progress = (index + 1) / total_products
-        progress_bar.progress(progress)
+        progress_placeholder.progress(progress)
 
     product_df['mapped_classifications_text'] = text_based_results
     product_df['image_classification'] = image_based_results
     return product_df
 
 # 🖼️ UI
-st.title("🧠 Product Classifier Tool for Flywheel (with BLIP Image Analysis)")
-st.markdown("Upload your product details and rules to auto-classify, now using BLIP for smart image understanding!")
+st.title("🧠 Product Classifier Tool for Flywheel (BLIP-powered)")
+st.markdown("Upload your product details and classification rules. Images are analyzed with BLIP for smart auto-labeling!")
 
 product_file = st.file_uploader("📦 Upload Product Details (Excel/CSV)", type=["xlsx", "csv"])
 rules_file = st.file_uploader("📋 Upload Classification Rules (Excel/CSV)", type=["xlsx", "csv"])
