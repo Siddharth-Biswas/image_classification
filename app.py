@@ -4,58 +4,47 @@ import requests
 from io import BytesIO
 from PIL import Image
 
-st.set_page_config(page_title="Product Classifier", layout="wide")
-st.title("🧠 Product Classifier Tool for Flywheel (with Image Analysis)")
-st.markdown("Upload your product details and rules to auto-classify, now with image analysis and progress!")
+import torch
+from transformers import BlipProcessor, BlipForConditionalGeneration
 
-product_file = st.file_uploader("📦 Upload Product Details (Excel/CSV)", type=["xlsx", "csv"])
-rules_file = st.file_uploader("📋 Upload Classification Rules (Excel/CSV)", type=["xlsx", "csv"])
+# Load BLIP model and processor once
+@st.cache_resource
+def load_blip_model():
+    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+    return processor, model
 
+processor, model = load_blip_model()
 
-def classify_image(image_url):
-    """Downloads an image from a URL and classifies it based on aspect ratio."""
+def classify_image_blip(image_url):
+    """Downloads image and returns a BLIP-generated caption/classification."""
     try:
         response = requests.get(image_url, stream=True, timeout=5)
         response.raise_for_status()
-
-        image = Image.open(BytesIO(response.content))
-        width, height = image.size
-        if width > height:
-            return "Horizontal Image"
-        elif height > width:
-            return "Vertical Image"
-        else:
-            return "Square Image"
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading image: {e}")
-        return "Image Download Error"
+        image = Image.open(BytesIO(response.content)).convert("RGB")
+        inputs = processor(images=image, return_tensors="pt")
+        out = model.generate(**inputs)
+        caption = processor.decode(out[0], skip_special_tokens=True)
+        return caption
     except Exception as e:
-        print(f"Error processing image: {e}")
-        return "Image Processing Error"
-
+        print(f"Error classifying image: {e}")
+        return "Image Classification Error"
 
 def clean_or_split(text):
-    """Always splits by OR logic (used for Exclude)."""
     if pd.isna(text) or not isinstance(text, str):
         return []
     text = text.replace(' and ', ',').replace(' or ', ',')
     return [t.strip().lower() for t in text.split(',') if t.strip()]
 
-
 def parse_include(text):
-    """Splits Include text respecting AND and OR logic."""
     if pd.isna(text) or not isinstance(text, str):
         return []
-
     text = text.lower()
-
     if ' and ' in text:
         and_parts = text.split(' and ')
         return [clean_or_split(part) for part in and_parts]
     else:
         return [clean_or_split(text)]
-
 
 def preprocess_rules(rules_df):
     parsed_rules = []
@@ -66,25 +55,21 @@ def preprocess_rules(rules_df):
         parsed_rules.append((include, exclude, label))
     return parsed_rules
 
-
-def matches_rule(title, include, exclude):
+def matches_rule(text, include, exclude):
     for and_block in include:
-        if not any(word in title for word in and_block):
+        if not any(word in text for word in and_block):
             return False
-    if any(word in title for word in exclude):
+    if any(word in text for word in exclude):
         return False
     return True
 
-
 def classify_products(product_df, rules_df):
-    """Classifies products based on title and image, with a progress bar."""
-
     parsed_rules = preprocess_rules(rules_df)
     titles = product_df['TITLE'].str.lower().fillna('')
     text_based_results = []
     image_based_results = []
 
-    progress_bar = st.progress(0)  # Initialize progress bar
+    progress_bar = st.progress(0)
     total_products = len(product_df)
 
     for index, title in enumerate(titles):
@@ -94,15 +79,14 @@ def classify_products(product_df, rules_df):
                 matches.append(label)
         text_based_results.append(', '.join(matches))
 
-        # Image classification
+        # Image classification using BLIP
         image_url = product_df['IMAGE_URL'].iloc[index]
         if pd.isna(image_url):
             image_classification = "No Image URL"
         else:
-            image_classification = classify_image(image_url)
+            image_classification = classify_image_blip(image_url)
         image_based_results.append(image_classification)
 
-        # Update progress bar
         progress = (index + 1) / total_products
         progress_bar.progress(progress)
 
@@ -110,6 +94,13 @@ def classify_products(product_df, rules_df):
     product_df['image_classification'] = image_based_results
     return product_df
 
+# Streamlit UI
+st.set_page_config(page_title="Product Classifier", layout="wide")
+st.title("🧠 Product Classifier Tool for Flywheel (with BLIP Image Analysis)")
+st.markdown("Upload your product details and rules to auto-classify, now using BLIP for smart image understanding!")
+
+product_file = st.file_uploader("📦 Upload Product Details (Excel/CSV)", type=["xlsx", "csv"])
+rules_file = st.file_uploader("📋 Upload Classification Rules (Excel/CSV)", type=["xlsx", "csv"])
 
 if product_file and rules_file:
     try:
@@ -137,9 +128,7 @@ if product_file and rules_file:
 
     st.success("✅ Files uploaded successfully!")
 
-    output_df = classify_products(
-        product_df.copy(), rules_df.copy()
-    )  # Use copies to avoid modifying originals
+    output_df = classify_products(product_df.copy(), rules_df.copy())
 
     st.subheader("🔍 Preview of Classified Products")
     st.dataframe(output_df, use_container_width=True)
