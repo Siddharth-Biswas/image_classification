@@ -1,38 +1,38 @@
 import streamlit as st
+st.set_page_config(page_title="Product Classifier", layout="wide")
+
 import pandas as pd
 import requests
 from io import BytesIO
 from PIL import Image
-import torch
 from transformers import BlipProcessor, BlipForConditionalGeneration
+import torch
 
-# ✅ Must be the first Streamlit command
-st.set_page_config(page_title="Product Classifier", layout="wide")
+# Load BLIP model + processor
+processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base", use_fast=False)
+model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
 
-# 🔁 Load BLIP model
-@st.cache_resource
-def load_blip_model():
-    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-    return processor, model
+st.title("🧠 Product Classifier Tool for Flywheel (with Image Analysis via BLIP)")
+st.markdown("Upload your product details and rules to auto-classify, now with image captioning and progress!")
 
-processor, model = load_blip_model()
+product_file = st.file_uploader("📦 Upload Product Details (Excel/CSV)", type=["xlsx", "csv"])
+rules_file = st.file_uploader("📋 Upload Classification Rules (Excel/CSV)", type=["xlsx", "csv"])
 
-# 🧠 BLIP caption generation
-def classify_image_blip(image_url):
+def classify_image_with_blip(image_url):
     try:
         response = requests.get(image_url, stream=True, timeout=5)
         response.raise_for_status()
-        image = Image.open(BytesIO(response.content)).convert("RGB")
-        inputs = processor(images=image, return_tensors="pt")
+        raw_image = Image.open(BytesIO(response.content)).convert('RGB')
+
+        inputs = processor(raw_image, return_tensors="pt").to(device)
         out = model.generate(**inputs)
         caption = processor.decode(out[0], skip_special_tokens=True)
         return caption
     except Exception as e:
-        print(f"Error classifying image: {e}")
-        return "Image Classification Error"
+        return f"BLIP Error: {str(e)}"
 
-# 🔍 Text rule helpers
 def clean_or_split(text):
     if pd.isna(text) or not isinstance(text, str):
         return []
@@ -44,8 +44,7 @@ def parse_include(text):
         return []
     text = text.lower()
     if ' and ' in text:
-        and_parts = text.split(' and ')
-        return [clean_or_split(part) for part in and_parts]
+        return [clean_or_split(part) for part in text.split(' and ')]
     else:
         return [clean_or_split(text)]
 
@@ -58,74 +57,57 @@ def preprocess_rules(rules_df):
         parsed_rules.append((include, exclude, label))
     return parsed_rules
 
-def matches_rule(text, include, exclude):
+def matches_rule(title, include, exclude):
     for and_block in include:
-        if not any(word in text for word in and_block):
+        if not any(word in title for word in and_block):
             return False
-    if any(word in text for word in exclude):
+    if any(word in title for word in exclude):
         return False
     return True
 
-# 🔄 Main classification function
 def classify_products(product_df, rules_df):
     parsed_rules = preprocess_rules(rules_df)
     titles = product_df['TITLE'].str.lower().fillna('')
-    text_based_results = []
-    image_based_results = []
+    text_results = []
+    image_results = []
 
-    progress_placeholder = st.empty()
-    total_products = len(product_df)
+    progress_bar = st.progress(0)
+    total = len(product_df)
 
-    for index, title in enumerate(titles):
+    for i, title in enumerate(titles):
         matches = []
         for include, exclude, label in parsed_rules:
             if matches_rule(title, include, exclude):
                 matches.append(label)
-        text_based_results.append(', '.join(matches))
+        text_results.append(', '.join(matches))
 
-        image_url = product_df['IMAGE_URL'].iloc[index]
+        image_url = product_df['IMAGE_URL'].iloc[i]
         if pd.isna(image_url):
-            image_classification = "No Image URL"
+            image_result = "No Image URL"
         else:
-            image_classification = classify_image_blip(image_url)
-        image_based_results.append(image_classification)
+            image_result = classify_image_with_blip(image_url)
+        image_results.append(image_result)
 
-        progress = (index + 1) / total_products
-        progress_placeholder.progress(progress)
+        progress_bar.progress((i + 1) / total)
 
-    product_df['mapped_classifications_text'] = text_based_results
-    product_df['image_classification'] = image_based_results
+    product_df['mapped_classifications_text'] = text_results
+    product_df['image_classification'] = image_results
     return product_df
-
-# 🖼️ UI
-st.title("🧠 Product Classifier Tool for Flywheel (BLIP-powered)")
-st.markdown("Upload your product details and classification rules. Images are analyzed with BLIP for smart auto-labeling!")
-
-product_file = st.file_uploader("📦 Upload Product Details (Excel/CSV)", type=["xlsx", "csv"])
-rules_file = st.file_uploader("📋 Upload Classification Rules (Excel/CSV)", type=["xlsx", "csv"])
 
 if product_file and rules_file:
     try:
-        product_df = (
-            pd.read_excel(product_file)
-            if product_file.name.endswith('xlsx')
-            else pd.read_csv(product_file)
-        )
-        rules_df = (
-            pd.read_excel(rules_file)
-            if rules_file.name.endswith('xlsx')
-            else pd.read_csv(rules_file)
-        )
+        product_df = pd.read_excel(product_file) if product_file.name.endswith('xlsx') else pd.read_csv(product_file)
+        rules_df = pd.read_excel(rules_file) if rules_file.name.endswith('xlsx') else pd.read_csv(rules_file)
 
         if "TITLE" not in product_df.columns or "IMAGE_URL" not in product_df.columns:
-            st.error("Product file must contain 'TITLE' and 'IMAGE_URL' columns.")
+            st.error("❌ Product file must contain 'TITLE' and 'IMAGE_URL' columns.")
             st.stop()
         if not all(col in rules_df.columns for col in ['Rule', 'Include', 'Exclude']):
-            st.error("Rules file must contain 'Rule', 'Include', and 'Exclude' columns.")
+            st.error("❌ Rules file must contain 'Rule', 'Include', and 'Exclude' columns.")
             st.stop()
 
     except Exception as e:
-        st.error(f"Error reading files: {e}")
+        st.error(f"❌ Error reading files: {e}")
         st.stop()
 
     st.success("✅ Files uploaded successfully!")
