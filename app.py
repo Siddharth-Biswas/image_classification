@@ -2,25 +2,21 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from PIL import Image  # For basic image handling
+from PIL import Image
 
 st.set_page_config(page_title="Product Classifier", layout="wide")
 st.title("🧠 Product Classifier Tool for Flywheel (with Image Analysis)")
-st.markdown("Upload your product details and rules to auto-classify, now with basic image analysis.")
+st.markdown("Upload your product details and rules to auto-classify, now with image analysis and progress!")
 
 product_file = st.file_uploader("📦 Upload Product Details (Excel/CSV)", type=["xlsx", "csv"])
 rules_file = st.file_uploader("📋 Upload Classification Rules (Excel/CSV)", type=["xlsx", "csv"])
 
-def classify_image(image_url):
-    """
-    Downloads an image from a URL and classifies it based on aspect ratio.
 
-    This is a simplified example. In a real application, you would use
-    a computer vision model for more meaningful classification.
-    """
+def classify_image(image_url):
+    """Downloads an image from a URL and classifies it based on aspect ratio."""
     try:
         response = requests.get(image_url, stream=True, timeout=5)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()
 
         image = Image.open(BytesIO(response.content))
         width, height = image.size
@@ -38,12 +34,14 @@ def classify_image(image_url):
         print(f"Error processing image: {e}")
         return "Image Processing Error"
 
+
 def clean_or_split(text):
     """Always splits by OR logic (used for Exclude)."""
     if pd.isna(text) or not isinstance(text, str):
         return []
     text = text.replace(' and ', ',').replace(' or ', ',')
     return [t.strip().lower() for t in text.split(',') if t.strip()]
+
 
 def parse_include(text):
     """Splits Include text respecting AND and OR logic."""
@@ -58,6 +56,7 @@ def parse_include(text):
     else:
         return [clean_or_split(text)]
 
+
 def preprocess_rules(rules_df):
     parsed_rules = []
     for _, row in rules_df.iterrows():
@@ -67,6 +66,7 @@ def preprocess_rules(rules_df):
         parsed_rules.append((include, exclude, label))
     return parsed_rules
 
+
 def matches_rule(title, include, exclude):
     for and_block in include:
         if not any(word in title for word in and_block):
@@ -75,14 +75,17 @@ def matches_rule(title, include, exclude):
         return False
     return True
 
+
 def classify_products(product_df, rules_df):
-    """
-    Classifies products based on title and image.
-    """
+    """Classifies products based on title and image, with a progress bar."""
+
     parsed_rules = preprocess_rules(rules_df)
     titles = product_df['TITLE'].str.lower().fillna('')
     text_based_results = []
     image_based_results = []
+
+    progress_bar = st.progress(0)  # Initialize progress bar
+    total_products = len(product_df)
 
     for index, title in enumerate(titles):
         matches = []
@@ -99,14 +102,27 @@ def classify_products(product_df, rules_df):
             image_classification = classify_image(image_url)
         image_based_results.append(image_classification)
 
+        # Update progress bar
+        progress = (index + 1) / total_products
+        progress_bar.progress(progress)
+
     product_df['mapped_classifications_text'] = text_based_results
     product_df['image_classification'] = image_based_results
     return product_df
 
+
 if product_file and rules_file:
     try:
-        product_df = pd.read_excel(product_file) if product_file.name.endswith('xlsx') else pd.read_csv(product_file)
-        rules_df = pd.read_excel(rules_file) if rules_file.name.endswith('xlsx') else pd.read_csv(rules_file)
+        product_df = (
+            pd.read_excel(product_file)
+            if product_file.name.endswith('xlsx')
+            else pd.read_csv(product_file)
+        )
+        rules_df = (
+            pd.read_excel(rules_file)
+            if rules_file.name.endswith('xlsx')
+            else pd.read_csv(rules_file)
+        )
 
         if "TITLE" not in product_df.columns or "IMAGE_URL" not in product_df.columns:
             st.error("Product file must contain 'TITLE' and 'IMAGE_URL' columns.")
@@ -121,7 +137,9 @@ if product_file and rules_file:
 
     st.success("✅ Files uploaded successfully!")
 
-    output_df = classify_products(product_df.copy(), rules_df.copy())  # Use copies to avoid modifying originals
+    output_df = classify_products(
+        product_df.copy(), rules_df.copy()
+    )  # Use copies to avoid modifying originals
 
     st.subheader("🔍 Preview of Classified Products")
     st.dataframe(output_df, use_container_width=True)
